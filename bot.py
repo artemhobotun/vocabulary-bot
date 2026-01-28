@@ -1,6 +1,8 @@
 import os
 import json
 import logging
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import anthropic
@@ -20,6 +22,7 @@ NOTION_TOKEN = os.environ.get('NOTION_TOKEN')
 NOTION_DATABASE_ID = os.environ.get('NOTION_DATABASE_ID')
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
 ALLOWED_USER_ID = os.environ.get('ALLOWED_USER_ID')  # Опционально: ограничить доступ
+PORT = int(os.environ.get('PORT', 8000))
 
 # Инициализация клиента Anthropic
 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -33,6 +36,25 @@ LANGUAGE_MAP = {
     'латынь': 'Латынь 🏛️',
     'французский': 'Французский 🇫🇷',
 }
+
+
+# === Health Check сервер для Koyeb ===
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'OK')
+
+    def log_message(self, format, *args):
+        pass  # Отключаем логи health check
+
+
+def start_health_server():
+    """Запускает HTTP-сервер для health check в отдельном потоке."""
+    server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
+    logger.info(f"Health check server started on port {PORT}")
+    server.serve_forever()
 
 
 async def analyze_word_with_claude(word: str) -> dict:
@@ -217,6 +239,10 @@ def main() -> None:
     if missing:
         logger.error(f"Missing environment variables: {', '.join(missing)}")
         raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+
+    # Запускаем health check сервер в отдельном потоке
+    health_thread = threading.Thread(target=start_health_server, daemon=True)
+    health_thread.start()
 
     # Создаём приложение
     application = Application.builder().token(TELEGRAM_TOKEN).build()
